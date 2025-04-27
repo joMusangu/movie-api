@@ -28,7 +28,7 @@ The **Movie Booking System (MBS)** is a user-friendly, web-based platform that l
 #### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/joMusangu/mbs.git
+https://github.com/joMusangu/movie-api.git
 ```
 
 #### 2. Navigate to the Backend Folder
