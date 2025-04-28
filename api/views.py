@@ -473,7 +473,6 @@ def current_user(request):
         return Response({'error': 'No authenticated user'}, status=status.HTTP_401_UNAUTHORIZED)
 
 @api_view(['GET', 'PUT'])
-@permission_classes([IsAuthenticated])
 def user_profile(request):
     """
     Get or update the authenticated user's profile
