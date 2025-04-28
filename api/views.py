@@ -20,28 +20,38 @@ from api import models
 
 
 # Authentication views
+@csrf_exempt
 @api_view(['POST'])
 def login_view(request):
-    serializer = LoginSerializer(data=request.data)
-    if serializer.is_valid():
-        username = serializer.validated_data['username']
-        password = serializer.validated_data['password']
-        
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+        except json.JSONDecodeError:
+            return JsonResponse({'error': 'Invalid JSON format'}, status=400)
+
+        username = data.get('username')
+        password = data.get('password')
+
+        if not username or not password:
+            return JsonResponse({'error': 'Username and password are required'}, status=400)
+
         user = authenticate(request, username=username, password=password)
+
         if user is not None:
             login(request, user)
-            return Response({
+            return JsonResponse({
                 'id': user.id,
                 'username': user.username,
                 'email': user.email,
                 'is_admin': user.is_admin
             })
         else:
-            return Response({'error': 'Invalid credentials'}, status=status.HTTP_400_BAD_REQUEST)
-    
-    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            return JsonResponse({'error': 'Invalid credentials'}, status=400)
+
+    return JsonResponse({'error': 'Method not allowed'}, status=405)
 
 @csrf_exempt
+@api_view(['POST'])
 def register_view(request):
     if request.method == 'POST':
         data = json.loads(request.body)
@@ -67,6 +77,7 @@ def register_view(request):
     return JsonResponse({'error': 'Method not allowed'}, status=405)
 
 @csrf_exempt
+@api_view(['POST'])
 def logout_view(request):
     if request.method == 'POST':
         logout(request)
@@ -75,6 +86,7 @@ def logout_view(request):
     return JsonResponse({'error': 'Method not allowed'}, status=405)
 
 # Movie views
+@csrf_exempt
 @api_view(['GET', 'POST'])
 def movie_list_create(request):
     if request.method == 'GET':
@@ -89,6 +101,7 @@ def movie_list_create(request):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+@csrf_exempt
 @api_view(['GET', 'PUT', 'DELETE'])
 def movie_detail_update_delete(request, pk):
     movie = get_object_or_404(Movie, pk=pk)
@@ -108,6 +121,7 @@ def movie_detail_update_delete(request, pk):
         movie.delete()
         return Response({'message': 'Movie deleted successfully'}, status=status.HTTP_204_NO_CONTENT)
 
+@csrf_exempt
 @api_view(['GET'])
 def movie_list(request):
     movies = Movie.objects.all()
@@ -126,6 +140,7 @@ def movie_list(request):
     
     return Response(data)
 
+@csrf_exempt
 @api_view(['GET'])
 def movie_detail(request, pk):
     movie = get_object_or_404(Movie, pk=pk)
@@ -155,6 +170,7 @@ def movie_detail(request, pk):
     
     return Response(data)
 
+@csrf_exempt
 @api_view(['POST'])
 def movie_create(request):
     serializer = MovieSerializer(data=request.data)
@@ -163,6 +179,7 @@ def movie_create(request):
         return Response(serializer.data, status=status.HTTP_201_CREATED)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+@csrf_exempt
 @api_view(['PUT'])
 def movie_update(request, pk):
     movie = get_object_or_404(Movie, pk=pk)
@@ -190,6 +207,7 @@ def movie_update(request, pk):
         'message': 'Movie updated successfully'
     })
 
+@csrf_exempt
 @api_view(['DELETE'])
 def movie_delete(request, pk):
     movie = get_object_or_404(Movie, pk=pk)
@@ -200,6 +218,7 @@ def movie_delete(request, pk):
     })
 
 # Showtime views
+@csrf_exempt
 @api_view(['GET'])
 def showtime_list(request):
     date_str = request.query_params.get('date')
@@ -229,6 +248,7 @@ def showtime_list(request):
     
     return Response(data)
 
+@csrf_exempt
 @api_view(['POST'])
 def showtime_create(request):
     movie_id = request.data.get('movie_id')
@@ -255,6 +275,7 @@ def showtime_create(request):
         'message': 'Showtime created successfully'
     }, status=status.HTTP_201_CREATED)
 
+@csrf_exempt
 @api_view(['DELETE'])
 def showtime_delete(request, pk):
     showtime = get_object_or_404(Showtime, pk=pk)
@@ -265,8 +286,8 @@ def showtime_delete(request, pk):
     })
 
 # Reservation views
+@csrf_exempt
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
 def reservation_create(request):
     showtime_id = request.data.get('showtime_id')
     ticket_count = int(request.data.get('ticket_count', 1))
@@ -301,30 +322,8 @@ def reservation_create(request):
         'message': 'Reservation created successfully'
     }, status=status.HTTP_201_CREATED)
 
-@api_view(['GET'])
-def user_reservations(request):
-    reservations = Reservation.objects.filter(user=request.user)
-    data = [{
-        'id': reservation.id,
-        'movie': {
-            'id': reservation.showtime.movie.id,
-            'title': reservation.showtime.movie.title,
-            'poster_image': request.build_absolute_uri(reservation.showtime.movie.poster_image.url) if reservation.showtime.movie.poster_image else None
-        },
-        'showtime': {
-            'date': reservation.showtime.date,
-            'time': reservation.showtime.time.strftime('%H:%M')
-        },
-        'ticket_count': reservation.ticket_count,
-        'total_price': float(reservation.total_price),
-        'status': reservation.status,
-        'created_at': reservation.created_at
-    } for reservation in reservations]
-    
-    return Response(data)
-
+@csrf_exempt
 @api_view(['DELETE'])
-@permission_classes([IsAuthenticated])
 def reservation_cancel(request, pk):
     reservation = get_object_or_404(Reservation, pk=pk)
     
@@ -347,8 +346,29 @@ def reservation_cancel(request, pk):
         'message': 'Reservation cancelled successfully'
     })
 
+@api_view(['GET'])
+def user_reservations(request):
+    reservations = Reservation.objects.filter(user=request.user)
+    data = [{
+        'id': reservation.id,
+        'movie': {
+            'id': reservation.showtime.movie.id,
+            'title': reservation.showtime.movie.title,
+            'poster_image': request.build_absolute_uri(reservation.showtime.movie.poster_image.url) if reservation.showtime.movie.poster_image else None
+        },
+        'showtime': {
+            'date': reservation.showtime.date,
+            'time': reservation.showtime.time.strftime('%H:%M')
+        },
+        'ticket_count': reservation.ticket_count,
+        'total_price': float(reservation.total_price),
+        'status': reservation.status,
+        'created_at': reservation.created_at
+    } for reservation in reservations]
+    
+    return Response(data)
+
 @api_view(['GET', 'POST'])
-@permission_classes([AllowAny])  # Allow unrestricted access
 def reservation_list_create(request):
     if request.method == 'GET':
         reservations = Reservation.objects.all()
@@ -363,7 +383,6 @@ def reservation_list_create(request):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['GET', 'DELETE'])
-@permission_classes([IsAuthenticated])
 def reservation_detail_cancel(request, pk):
     reservation = get_object_or_404(Reservation, pk=pk)
 
