@@ -5,19 +5,19 @@ from django.contrib.auth import authenticate, login, logout
 from django.db import transaction
 from django.utils import timezone
 from django.db.models import Avg
+from django.core.mail import send_mail
+from django.template.loader import render_to_string
+from django.utils.html import strip_tags
 
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny
+from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 import json
 from datetime import datetime
 
 from .models import User, Movie, Showtime, Reservation, Rating
-from .serializers import LoginSerializer, MovieSerializer, ReservationSerializer
 from api import models
-
 
 # Authentication views
 @csrf_exempt
@@ -63,7 +63,7 @@ def register_view(request):
             return JsonResponse({'error': 'Username already exists'}, status=400)
         
         if User.objects.filter(email=email).exists():
-            return JsonResponse({'error': 'Email already exists'}, status=400)
+            return JsonResponse({'error': 'Email already in use'}, status=400)
         
         user = User.objects.create_user(username=username, email=email, password=password)
         
@@ -86,42 +86,6 @@ def logout_view(request):
     return JsonResponse({'error': 'Method not allowed'}, status=405)
 
 # Movie views
-@csrf_exempt
-@api_view(['GET', 'POST'])
-def movie_list_create(request):
-    if request.method == 'GET':
-        movies = Movie.objects.all()
-        serializer = MovieSerializer(movies, many=True)
-        return Response(serializer.data)
-
-    elif request.method == 'POST':
-        serializer = MovieSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-@csrf_exempt
-@api_view(['GET', 'PUT', 'DELETE'])
-def movie_detail_update_delete(request, pk):
-    movie = get_object_or_404(Movie, pk=pk)
-
-    if request.method == 'GET':
-        serializer = MovieSerializer(movie)
-        return Response(serializer.data)
-
-    elif request.method == 'PUT':
-        serializer = MovieSerializer(movie, data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-    elif request.method == 'DELETE':
-        movie.delete()
-        return Response({'message': 'Movie deleted successfully'}, status=status.HTTP_204_NO_CONTENT)
-
-@csrf_exempt
 @api_view(['GET'])
 def movie_list(request):
     movies = Movie.objects.all()
@@ -140,7 +104,6 @@ def movie_list(request):
     
     return Response(data)
 
-@csrf_exempt
 @api_view(['GET'])
 def movie_detail(request, pk):
     movie = get_object_or_404(Movie, pk=pk)
@@ -170,16 +133,32 @@ def movie_detail(request, pk):
     
     return Response(data)
 
-@csrf_exempt
 @api_view(['POST'])
 def movie_create(request):
-    serializer = MovieSerializer(data=request.data)
-    if serializer.is_valid():
-        serializer.save()
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    title = request.data.get('title')
+    description = request.data.get('description')
+    genre = request.data.get('genre')
+    director = request.data.get('director')
+    cast = request.data.get('cast')
+    duration = request.data.get('duration')
+    poster_image = request.FILES.get('poster_image')
+    
+    movie = Movie.objects.create(
+        title=title,
+        description=description,
+        genre=genre,
+        director=director,
+        cast=','.join(cast) if isinstance(cast, list) else cast,
+        duration=duration,
+        poster_image=poster_image
+    )
+    
+    return Response({
+        'id': movie.id,
+        'title': movie.title,
+        'message': 'Movie created successfully'
+    }, status=status.HTTP_201_CREATED)
 
-@csrf_exempt
 @api_view(['PUT'])
 def movie_update(request, pk):
     movie = get_object_or_404(Movie, pk=pk)
@@ -207,7 +186,6 @@ def movie_update(request, pk):
         'message': 'Movie updated successfully'
     })
 
-@csrf_exempt
 @api_view(['DELETE'])
 def movie_delete(request, pk):
     movie = get_object_or_404(Movie, pk=pk)
@@ -218,7 +196,6 @@ def movie_delete(request, pk):
     })
 
 # Showtime views
-@csrf_exempt
 @api_view(['GET'])
 def showtime_list(request):
     date_str = request.query_params.get('date')
@@ -248,7 +225,6 @@ def showtime_list(request):
     
     return Response(data)
 
-@csrf_exempt
 @api_view(['POST'])
 def showtime_create(request):
     movie_id = request.data.get('movie_id')
@@ -275,7 +251,6 @@ def showtime_create(request):
         'message': 'Showtime created successfully'
     }, status=status.HTTP_201_CREATED)
 
-@csrf_exempt
 @api_view(['DELETE'])
 def showtime_delete(request, pk):
     showtime = get_object_or_404(Showtime, pk=pk)
@@ -286,11 +261,25 @@ def showtime_delete(request, pk):
     })
 
 # Reservation views
-@csrf_exempt
 @api_view(['POST'])
 def reservation_create(request):
     showtime_id = request.data.get('showtime_id')
     ticket_count = int(request.data.get('ticket_count', 1))
+    username = request.data.get('username')
+    
+    # Return error if no username is provided
+    if not username:
+        return Response({
+            'error': 'Username is required'
+        }, status=status.HTTP_400_BAD_REQUEST)
+    
+    # Find the user by username
+    try:
+        user = User.objects.get(username=username)
+    except User.DoesNotExist:
+        return Response({
+            'error': f'User with username {username} does not exist'
+        }, status=status.HTTP_400_BAD_REQUEST)
     
     showtime = get_object_or_404(Showtime, pk=showtime_id)
     
@@ -305,12 +294,95 @@ def reservation_create(request):
     
     with transaction.atomic():
         reservation = Reservation.objects.create(
-            user=request.user,
+            user=user,  # Use the retrieved user instead of request.user
             showtime=showtime,
             ticket_count=ticket_count,
             total_price=total_price,
             status='upcoming'
         )
+    
+    # Format date for email
+    formatted_date = showtime.date.strftime('%A, %B %d, %Y')
+    
+    # Send confirmation email
+    try:
+        subject = f'Reservation Confirmation - {showtime.movie.title}'
+        
+        # Create HTML email content
+        html_message = f"""
+        <html>
+        <head>
+            <style>
+                body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+                .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+                .header {{ background-color: #6366f1; color: white; padding: 15px; text-align: center; }}
+                .content {{ padding: 20px; border: 1px solid #ddd; }}
+                .footer {{ text-align: center; margin-top: 20px; font-size: 12px; color: #777; }}
+                .details {{ margin: 20px 0; }}
+                .details-row {{ display: flex; justify-content: space-between; margin-bottom: 10px; }}
+                .total {{ font-weight: bold; border-top: 1px solid #ddd; padding-top: 10px; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>Your Movie Reservation is Confirmed!</h1>
+                </div>
+                <div class="content">
+                    <p>Dear {user.first_name or user.username},</p>
+                    <p>Thank you for your reservation. Your tickets for <strong>{showtime.movie.title}</strong> have been confirmed.</p>
+                    
+                    <div class="details">
+                        <h2>Reservation Details:</h2>
+                        <div class="details-row">
+                            <span>Movie:</span>
+                            <span>{showtime.movie.title}</span>
+                        </div>
+                        <div class="details-row">
+                            <span>Date:</span>
+                            <span>{formatted_date}</span>
+                        </div>
+                        <div class="details-row">
+                            <span>Time:</span>
+                            <span>{showtime.time.strftime('%H:%M')}</span>
+                        </div>
+                        <div class="details-row">
+                            <span>Number of Tickets:</span>
+                            <span>{ticket_count}</span>
+                        </div>
+                        <div class="details-row total">
+                            <span>Total Price:</span>
+                            <span>${total_price:.2f}</span>
+                        </div>
+                    </div>
+                    
+                    <p>Reservation ID: <strong>{reservation.id}</strong></p>
+                    <p>Please arrive at least 15 minutes before the showtime. We hope you enjoy the movie!</p>
+                </div>
+                <div class="footer">
+                    <p>This is an automated message. Please do not reply to this email.</p>
+                    <p>&copy; {timezone.now().year} CinemaHub. All rights reserved.</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        
+        # Plain text version for email clients that don't support HTML
+        plain_message = strip_tags(html_message)
+        
+        # Send the email
+        send_mail(
+            subject=subject,
+            message=plain_message,
+            from_email='RaiderView <mjtshisau@gmail.com>',
+            recipient_list=[user.email],
+            html_message=html_message,
+            fail_silently=True,
+        )
+    except Exception as e:
+        # Log the error but don't fail the reservation
+        print(f"Failed to send confirmation email: {str(e)}")
     
     return Response({
         'id': reservation.id,
@@ -322,13 +394,20 @@ def reservation_create(request):
         'message': 'Reservation created successfully'
     }, status=status.HTTP_201_CREATED)
 
-@csrf_exempt
 @api_view(['DELETE'])
 def reservation_cancel(request, pk):
     reservation = get_object_or_404(Reservation, pk=pk)
     
+    # Get username from request data
+    username = request.data.get('username')
+    
+    if not username:
+        return Response({
+            'error': 'Username is required'
+        }, status=status.HTTP_400_BAD_REQUEST)
+    
     # Check if the reservation belongs to the user
-    if reservation.user != request.user and not request.user.is_admin:
+    if reservation.user.username != username:
         return Response({
             'error': 'You do not have permission to cancel this reservation'
         }, status=status.HTTP_403_FORBIDDEN)
@@ -342,19 +421,107 @@ def reservation_cancel(request, pk):
     reservation.status = 'cancelled'
     reservation.save()
     
+    # Send cancellation email
+    try:
+        subject = f'Reservation Cancelled - {reservation.showtime.movie.title}'
+        
+        # Create HTML email content
+        html_message = f"""
+        <html>
+        <head>
+            <style>
+                body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+                .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+                .header {{ background-color: #ef4444; color: white; padding: 15px; text-align: center; }}
+                .content {{ padding: 20px; border: 1px solid #ddd; }}
+                .footer {{ text-align: center; margin-top: 20px; font-size: 12px; color: #777; }}
+                .details {{ margin: 20px 0; }}
+                .details-row {{ display: flex; justify-content: space-between; margin-bottom: 10px; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>Your Reservation Has Been Cancelled</h1>
+                </div>
+                <div class="content">
+                    <p>Dear {reservation.user.first_name or reservation.user.username},</p>
+                    <p>Your reservation for <strong>{reservation.showtime.movie.title}</strong> has been cancelled as requested.</p>
+                    
+                    <div class="details">
+                        <h2>Cancelled Reservation Details:</h2>
+                        <div class="details-row">
+                            <span>Movie:</span>
+                            <span>{reservation.showtime.movie.title}</span>
+                        </div>
+                        <div class="details-row">
+                            <span>Date:</span>
+                            <span>{reservation.showtime.date.strftime('%A, %B %d, %Y')}</span>
+                        </div>
+                        <div class="details-row">
+                            <span>Time:</span>
+                            <span>{reservation.showtime.time.strftime('%H:%M')}</span>
+                        </div>
+                        <div class="details-row">
+                            <span>Number of Tickets:</span>
+                            <span>{reservation.ticket_count}</span>
+                        </div>
+                    </div>
+                    
+                    <p>Reservation ID: <strong>{reservation.id}</strong></p>
+                    <p>If you did not request this cancellation or have any questions, please contact our customer support.</p>
+                </div>
+                <div class="footer">
+                    <p>This is an automated message. Please do not reply to this email.</p>
+                    <p>&copy; {timezone.now().year} CinemaHub. All rights reserved.</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        
+        # Plain text version for email clients that don't support HTML
+        plain_message = strip_tags(html_message)
+        
+        # Send the email
+        send_mail(
+            subject=subject,
+            message=plain_message,
+            from_email='CinemaHub <mjtshisau@gmail.com>',
+            recipient_list=[reservation.user.email],
+            html_message=html_message,
+            fail_silently=False,
+        )
+    except Exception as e:
+        # Log the error but don't fail the cancellation
+        print(f"Failed to send cancellation email: {str(e)}")
+    
     return Response({
         'message': 'Reservation cancelled successfully'
     })
 
 @api_view(['GET'])
 def user_reservations(request):
-    reservations = Reservation.objects.filter(user=request.user)
+    # Get username from query parameters
+    username = request.query_params.get('username')
+    
+    if not username:
+        return Response({'error': 'Username parameter is required'}, 
+                       status=status.HTTP_400_BAD_REQUEST)
+    
+    try:
+        user = User.objects.get(username=username)
+    except User.DoesNotExist:
+        return Response({'error': f'User with username {username} does not exist'}, 
+                       status=status.HTTP_404_NOT_FOUND)
+    
+    reservations = Reservation.objects.filter(user=user)
     data = [{
         'id': reservation.id,
         'movie': {
             'id': reservation.showtime.movie.id,
             'title': reservation.showtime.movie.title,
-            'poster_image': request.build_absolute_uri(reservation.showtime.movie.poster_image.url) if reservation.showtime.movie.poster_image else None
+            'poster_image': reservation.showtime.movie.poster_image
         },
         'showtime': {
             'date': reservation.showtime.date,
@@ -367,35 +534,6 @@ def user_reservations(request):
     } for reservation in reservations]
     
     return Response(data)
-
-@api_view(['GET', 'POST'])
-def reservation_list_create(request):
-    if request.method == 'GET':
-        reservations = Reservation.objects.all()
-        serializer = ReservationSerializer(reservations, many=True)
-        return Response(serializer.data)
-
-    elif request.method == 'POST':
-        serializer = ReservationSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-@api_view(['GET', 'DELETE'])
-def reservation_detail_cancel(request, pk):
-    reservation = get_object_or_404(Reservation, pk=pk)
-
-    if request.method == 'GET':
-        serializer = ReservationSerializer(reservation)
-        return Response(serializer.data)
-
-    elif request.method == 'DELETE':
-        if reservation.user != request.user and not request.user.is_admin:
-            return Response({'error': 'You do not have permission to cancel this reservation'}, status=status.HTTP_403_FORBIDDEN)
-        reservation.status = 'cancelled'
-        reservation.save()
-        return Response({'message': 'Reservation cancelled successfully'})
 
 # Admin views
 @api_view(['GET'])
@@ -439,8 +577,24 @@ def promote_user(request, pk):
 def demote_user(request, pk):
     user = get_object_or_404(User, pk=pk)
     
+    # Get username from request data
+    admin_username = request.data.get('admin_username')
+    
+    if not admin_username:
+        return Response({
+            'error': 'Admin username is required'
+        }, status=status.HTTP_400_BAD_REQUEST)
+    
+    # Check if admin user exists
+    try:
+        admin_user = User.objects.get(username=admin_username)
+    except User.DoesNotExist:
+        return Response({
+            'error': f'Admin user with username {admin_username} does not exist'
+        }, status=status.HTTP_400_BAD_REQUEST)
+    
     # Prevent demoting yourself
-    if user == request.user:
+    if user.id == admin_user.id:
         return Response({
             'error': 'You cannot demote yourself'
         }, status=status.HTTP_400_BAD_REQUEST)
@@ -453,13 +607,18 @@ def demote_user(request, pk):
     })
 
 @api_view(['GET'])
-@permission_classes([AllowAny])  # Allow unrestricted access
 def current_user(request):
     """
-    Return the authenticated user's details
+    Return user details by username
     """
-    user = request.user if request.user.is_authenticated else None
-    if user:
+    username = request.query_params.get('username')
+    
+    if not username:
+        return Response({'error': 'Username parameter is required'}, 
+                       status=status.HTTP_400_BAD_REQUEST)
+    
+    try:
+        user = User.objects.get(username=username)
         return Response({
             'id': user.id,
             'username': user.username,
@@ -469,29 +628,51 @@ def current_user(request):
             'is_admin': user.is_admin,
             'date_joined': user.date_joined
         })
-    else:
-        return Response({'error': 'No authenticated user'}, status=status.HTTP_401_UNAUTHORIZED)
+    except User.DoesNotExist:
+        return Response({'error': f'User with username {username} does not exist'}, 
+                       status=status.HTTP_404_NOT_FOUND)
 
 @api_view(['GET', 'PUT'])
 def user_profile(request):
     """
-    Get or update the authenticated user's profile
+    Get or update a user's profile by username
     """
-    user = request.user
-    
     if request.method == 'GET':
-        return Response({
-            'id': user.id,
-            'username': user.username,
-            'email': user.email,
-            'first_name': user.first_name,
-            'last_name': user.last_name,
-            'is_admin': user.is_admin,
-            'date_joined': user.date_joined
-        })
+        username = request.query_params.get('username')
+        
+        if not username:
+            return Response({'error': 'Username parameter is required'}, 
+                           status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            user = User.objects.get(username=username)
+            return Response({
+                'id': user.id,
+                'username': user.username,
+                'email': user.email,
+                'first_name': user.first_name,
+                'last_name': user.last_name,
+                'is_admin': user.is_admin,
+                'date_joined': user.date_joined
+            })
+        except User.DoesNotExist:
+            return Response({'error': f'User with username {username} does not exist'}, 
+                           status=status.HTTP_404_NOT_FOUND)
     
     elif request.method == 'PUT':
         # Update user profile
+        username = request.data.get('username')
+        
+        if not username:
+            return Response({'error': 'Username is required'}, 
+                           status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            user = User.objects.get(username=username)
+        except User.DoesNotExist:
+            return Response({'error': f'User with username {username} does not exist'}, 
+                           status=status.HTTP_404_NOT_FOUND)
+        
         data = request.data
         
         # Update fields if provided
@@ -558,22 +739,39 @@ def movie_ratings(request, pk):
     elif request.method in ['POST', 'PUT']:
         score = request.data.get('score')
         comment = request.data.get('comment', '')
+        username = request.data.get('username')
         
         if not score or not (1 <= int(score) <= 5):
             return Response({'error': 'Rating must be between 1 and 5'}, status=status.HTTP_400_BAD_REQUEST)
         
-        # Allow anonymous users to submit ratings
-        user = request.user if request.user.is_authenticated else None
+        # If username is provided, find the user
+        user = None
+        if username:
+            try:
+                user = User.objects.get(username=username)
+            except User.DoesNotExist:
+                return Response({'error': f'User with username {username} does not exist'}, 
+                               status=status.HTTP_404_NOT_FOUND)
         
         # Update or create rating
-        rating, created = Rating.objects.update_or_create(
-            user=user,  # Explicitly set to None for anonymous users
-            movie=movie,
-            defaults={
-                'score': score,
-                'comment': comment
-            }
-        )
+        if user:
+            rating, created = Rating.objects.update_or_create(
+                user=user,
+                movie=movie,
+                defaults={
+                    'score': score,
+                    'comment': comment
+                }
+            )
+        else:
+            # Create anonymous rating
+            rating = Rating.objects.create(
+                user=None,
+                movie=movie,
+                score=score,
+                comment=comment
+            )
+            created = True
         
         return Response({
             'id': rating.id,
@@ -584,15 +782,25 @@ def movie_ratings(request, pk):
         }, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
 def user_movie_rating(request, pk):
     """
-    Get the authenticated user's rating for a specific movie
+    Get a user's rating for a specific movie
     """
     movie = get_object_or_404(Movie, pk=pk)
+    username = request.query_params.get('username')
+    
+    if not username:
+        return Response({'error': 'Username parameter is required'}, 
+                       status=status.HTTP_400_BAD_REQUEST)
     
     try:
-        rating = Rating.objects.get(user=request.user, movie=movie)
+        user = User.objects.get(username=username)
+    except User.DoesNotExist:
+        return Response({'error': f'User with username {username} does not exist'}, 
+                       status=status.HTTP_404_NOT_FOUND)
+    
+    try:
+        rating = Rating.objects.get(user=user, movie=movie)
         return Response({
             'id': rating.id,
             'score': rating.score,
