@@ -5,6 +5,14 @@ from django.contrib.auth import authenticate, login, logout
 from django.db import transaction
 from django.utils import timezone
 from django.db.models import Avg
+from django.core.mail import EmailMultiAlternatives
+from django.template.loader import render_to_string
+from django.utils.html import strip_tags
+from django.conf import settings
+import qrcode
+from io import BytesIO
+import base64
+from django.core.files.base import ContentFile
 
 from rest_framework import status
 from rest_framework.decorators import api_view
@@ -291,12 +299,15 @@ def reservation_create(request):
     
     with transaction.atomic():
         reservation = Reservation.objects.create(
-            user=user,  # Use the retrieved user instead of request.user
+            user=user,
             showtime=showtime,
             ticket_count=ticket_count,
             total_price=total_price,
             status='upcoming'
         )
+        
+        # Send confirmation email with QR code
+        send_reservation_confirmation_email(reservation)
     
     return Response({
         'id': reservation.id,
@@ -307,6 +318,74 @@ def reservation_create(request):
         'total_price': total_price,
         'message': 'Reservation created successfully'
     }, status=status.HTTP_201_CREATED)
+
+# Add this function to generate and send the email
+def send_reservation_confirmation_email(reservation):
+    """Send a confirmation email with QR code for a reservation"""
+    try:
+        # Get user email
+        user_email = reservation.user.email
+        if not user_email:
+            print(f"No email found for user {reservation.user.username}")
+            return
+        
+        # Generate a unique code for the reservation
+        reservation_code = f"RES-{reservation.id}-{reservation.user.id}"
+        
+        # Create QR code
+        qr = qrcode.QRCode(
+            version=1,
+            error_correction=qrcode.constants.ERROR_CORRECT_L,
+            box_size=10,
+            border=4,
+        )
+        qr.add_data(reservation_code)
+        qr.make(fit=True)
+        
+        # Create an image from the QR Code
+        img = qr.make_image(fill_color="black", back_color="white")
+        
+        # Save QR code to a BytesIO object
+        buffer = BytesIO()
+        img.save(buffer, format="PNG")
+        buffer.seek(0)
+        
+        # Create email subject
+        subject = f"Your Movie Tickets for {reservation.showtime.movie.title}"
+        
+        # Create context for email template
+        context = {
+            'user': reservation.user,
+            'movie': reservation.showtime.movie,
+            'showtime': reservation.showtime,
+            'reservation': reservation,
+            'reservation_code': reservation_code,
+        }
+        
+        # Render HTML content
+        html_content = render_to_string('email/reservation_confirmation.html', context)
+        text_content = strip_tags(html_content)
+        
+        # Create email
+        email = EmailMultiAlternatives(
+            subject,
+            text_content,
+            settings.EMAIL_HOST_USER,
+            [user_email]
+        )
+        
+        # Attach HTML content
+        email.attach_alternative(html_content, "text/html")
+        
+        # Attach QR code
+        email.attach('ticket_qr.png', buffer.getvalue(), 'image/png')
+        
+        # Send email
+        email.send()
+        
+        print(f"Confirmation email sent to {user_email}")
+    except Exception as e:
+        print(f"Failed to send confirmation email: {str(e)}")
 
 @api_view(['DELETE'])
 def reservation_cancel(request, pk):
