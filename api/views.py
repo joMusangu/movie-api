@@ -5,9 +5,6 @@ from django.contrib.auth import authenticate, login, logout
 from django.db import transaction
 from django.utils import timezone
 from django.db.models import Avg
-from django.core.mail import send_mail
-from django.template.loader import render_to_string
-from django.utils.html import strip_tags
 
 from rest_framework import status
 from rest_framework.decorators import api_view
@@ -301,89 +298,6 @@ def reservation_create(request):
             status='upcoming'
         )
     
-    # Format date for email
-    formatted_date = showtime.date.strftime('%A, %B %d, %Y')
-    
-    # Send confirmation email
-    try:
-        subject = f'Reservation Confirmation - {showtime.movie.title}'
-        
-        # Create HTML email content
-        html_message = f"""
-        <html>
-        <head>
-            <style>
-                body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-                .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-                .header {{ background-color: #6366f1; color: white; padding: 15px; text-align: center; }}
-                .content {{ padding: 20px; border: 1px solid #ddd; }}
-                .footer {{ text-align: center; margin-top: 20px; font-size: 12px; color: #777; }}
-                .details {{ margin: 20px 0; }}
-                .details-row {{ display: flex; justify-content: space-between; margin-bottom: 10px; }}
-                .total {{ font-weight: bold; border-top: 1px solid #ddd; padding-top: 10px; }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h1>Your Movie Reservation is Confirmed!</h1>
-                </div>
-                <div class="content">
-                    <p>Dear {user.first_name or user.username},</p>
-                    <p>Thank you for your reservation. Your tickets for <strong>{showtime.movie.title}</strong> have been confirmed.</p>
-                    
-                    <div class="details">
-                        <h2>Reservation Details:</h2>
-                        <div class="details-row">
-                            <span>Movie:</span>
-                            <span>{showtime.movie.title}</span>
-                        </div>
-                        <div class="details-row">
-                            <span>Date:</span>
-                            <span>{formatted_date}</span>
-                        </div>
-                        <div class="details-row">
-                            <span>Time:</span>
-                            <span>{showtime.time.strftime('%H:%M')}</span>
-                        </div>
-                        <div class="details-row">
-                            <span>Number of Tickets:</span>
-                            <span>{ticket_count}</span>
-                        </div>
-                        <div class="details-row total">
-                            <span>Total Price:</span>
-                            <span>${total_price:.2f}</span>
-                        </div>
-                    </div>
-                    
-                    <p>Reservation ID: <strong>{reservation.id}</strong></p>
-                    <p>Please arrive at least 15 minutes before the showtime. We hope you enjoy the movie!</p>
-                </div>
-                <div class="footer">
-                    <p>This is an automated message. Please do not reply to this email.</p>
-                    <p>&copy; {timezone.now().year} CinemaHub. All rights reserved.</p>
-                </div>
-            </div>
-        </body>
-        </html>
-        """
-        
-        # Plain text version for email clients that don't support HTML
-        plain_message = strip_tags(html_message)
-        
-        # Send the email
-        send_mail(
-            subject=subject,
-            message=plain_message,
-            from_email='RaiderView <mjtshisau@gmail.com>',
-            recipient_list=[user.email],
-            html_message=html_message,
-            fail_silently=True,
-        )
-    except Exception as e:
-        # Log the error but don't fail the reservation
-        print(f"Failed to send confirmation email: {str(e)}")
-    
     return Response({
         'id': reservation.id,
         'movie': showtime.movie.title,
@@ -421,81 +335,6 @@ def reservation_cancel(request, pk):
     reservation.status = 'cancelled'
     reservation.save()
     
-    # Send cancellation email
-    try:
-        subject = f'Reservation Cancelled - {reservation.showtime.movie.title}'
-        
-        # Create HTML email content
-        html_message = f"""
-        <html>
-        <head>
-            <style>
-                body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-                .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-                .header {{ background-color: #ef4444; color: white; padding: 15px; text-align: center; }}
-                .content {{ padding: 20px; border: 1px solid #ddd; }}
-                .footer {{ text-align: center; margin-top: 20px; font-size: 12px; color: #777; }}
-                .details {{ margin: 20px 0; }}
-                .details-row {{ display: flex; justify-content: space-between; margin-bottom: 10px; }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h1>Your Reservation Has Been Cancelled</h1>
-                </div>
-                <div class="content">
-                    <p>Dear {reservation.user.first_name or reservation.user.username},</p>
-                    <p>Your reservation for <strong>{reservation.showtime.movie.title}</strong> has been cancelled as requested.</p>
-                    
-                    <div class="details">
-                        <h2>Cancelled Reservation Details:</h2>
-                        <div class="details-row">
-                            <span>Movie:</span>
-                            <span>{reservation.showtime.movie.title}</span>
-                        </div>
-                        <div class="details-row">
-                            <span>Date:</span>
-                            <span>{reservation.showtime.date.strftime('%A, %B %d, %Y')}</span>
-                        </div>
-                        <div class="details-row">
-                            <span>Time:</span>
-                            <span>{reservation.showtime.time.strftime('%H:%M')}</span>
-                        </div>
-                        <div class="details-row">
-                            <span>Number of Tickets:</span>
-                            <span>{reservation.ticket_count}</span>
-                        </div>
-                    </div>
-                    
-                    <p>Reservation ID: <strong>{reservation.id}</strong></p>
-                    <p>If you did not request this cancellation or have any questions, please contact our customer support.</p>
-                </div>
-                <div class="footer">
-                    <p>This is an automated message. Please do not reply to this email.</p>
-                    <p>&copy; {timezone.now().year} CinemaHub. All rights reserved.</p>
-                </div>
-            </div>
-        </body>
-        </html>
-        """
-        
-        # Plain text version for email clients that don't support HTML
-        plain_message = strip_tags(html_message)
-        
-        # Send the email
-        send_mail(
-            subject=subject,
-            message=plain_message,
-            from_email='CinemaHub <mjtshisau@gmail.com>',
-            recipient_list=[reservation.user.email],
-            html_message=html_message,
-            fail_silently=False,
-        )
-    except Exception as e:
-        # Log the error but don't fail the cancellation
-        print(f"Failed to send cancellation email: {str(e)}")
-    
     return Response({
         'message': 'Reservation cancelled successfully'
     })
@@ -515,7 +354,18 @@ def user_reservations(request):
         return Response({'error': f'User with username {username} does not exist'}, 
                        status=status.HTTP_404_NOT_FOUND)
     
+    # Update status for past showtimes
+    current_date = timezone.now().date()
+    past_reservations = Reservation.objects.filter(
+        user=user,
+        showtime__date__lt=current_date,
+        status='upcoming'
+    )
+    past_reservations.update(status='completed')
+    
+    # Get updated reservations
     reservations = Reservation.objects.filter(user=user)
+    
     data = [{
         'id': reservation.id,
         'movie': {
@@ -584,6 +434,7 @@ def demote_user(request, pk):
         return Response({
             'error': 'Admin username is required'
         }, status=status.HTTP_400_BAD_REQUEST)
+    
     
     # Check if admin user exists
     try:
