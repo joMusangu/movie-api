@@ -353,18 +353,24 @@ def send_reservation_confirmation_email(reservation):
         # Create email subject
         subject = f"Your Movie Tickets for {reservation.showtime.movie.title}"
         
-        # Create context for email template
-        context = {
-            'user': reservation.user,
-            'movie': reservation.showtime.movie,
-            'showtime': reservation.showtime,
-            'reservation': reservation,
-            'reservation_code': reservation_code,
-        }
-        
-        # Render HTML content
-        html_content = render_to_string('email/reservation_confirmation.html', context)
-        text_content = strip_tags(html_content)
+        # Create a plain text email with nice formatting
+        text_content = f"""
+Hello {reservation.user.first_name or reservation.user.username}!
+MOVIE TICKET CONFIRMATION
+-------------------------
+Thank you for your reservation at our cinema. Here are your ticket details:
+MOVIE: {reservation.showtime.movie.title}
+DATE: {reservation.showtime.date}
+TIME: {reservation.showtime.time.strftime('%H:%M')}
+TICKETS: {reservation.ticket_count}
+TOTAL PRICE: ${reservation.total_price}
+RESERVATION CODE: {reservation_code}
+Please present the attached QR code at the theater entrance.
+We look forward to seeing you!
+Best regards,
+The Movie Reservation Team
+(This is an automated message, please do not reply)
+"""
         
         # Create email
         email = EmailMultiAlternatives(
@@ -374,14 +380,11 @@ def send_reservation_confirmation_email(reservation):
             [user_email]
         )
         
-        # Attach HTML content
-        email.attach_alternative(html_content, "text/html")
-        
         # Attach QR code
         email.attach('ticket_qr.png', buffer.getvalue(), 'image/png')
         
         # Send email
-        email.send()
+        email.send(fail_silently=False)
         
         print(f"Confirmation email sent to {user_email}")
     except Exception as e:
